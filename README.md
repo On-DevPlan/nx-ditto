@@ -106,8 +106,20 @@ assets/nx-ditto/    随包分发的 agent 手册（只讲怎么用）
 
 ### 发版
 
-`gh repo create` 后推 tag，GitHub Actions 自动发 npm。首次建包需要本地
-`npm login` 首发一次，之后配 Trusted Publishing（OIDC 零 token）。
+push 到 `main` 即发布：流水线自动跑 lint/build/test → 打 tag → `npm publish`。
+
+- **当前走令牌流**：仓库 secret `NPM_TOKEN`（与 nx-sk 共用同一个 npm 账号的令牌）。
+- **换 Trusted Publishing（零令牌）**时改三处：发布步骤不注入 `NODE_AUTH_TOKEN`、
+  `setup-node` 去掉 `registry-url`、加 OIDC 预检步骤；并在 npm 侧配一次信任关系
+  （信任关系只能给**已存在**的包配置，所以新包首发要先本地登录发一次）。
+
+日常发版 = 改 `package.json` 的 version + 更新 CHANGELOG + push，然后盯住流水线：
+
+```bash
+RUN=$(gh run list --workflow=npm-publish.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+gh run watch "$RUN" --exit-status
+npm view nx-ditto version
+```
 
 ## 许可
 

@@ -2,19 +2,16 @@ name: Publish to npm
 
 # push 到 main 即发布。改 package.json 的 version 就等于「准备发版」。
 #
-# 走 **Trusted Publishing（OIDC 零令牌）**：CI 用 GitHub OIDC 换发布权，
-# 仓库里不放任何长期 npm 令牌。信任关系在 npm 侧配一次：
-#   npx npm@latest trust github nx-ditto --file npm-publish.yml \
-#     --repo On-DevPlan/nx-ditto --allow-publish -y
-# 三个「不要」见 A06：发布步骤不注入 NODE_AUTH_TOKEN、setup-node 不带
-# registry-url、Node 锁 24（npm@latest 要求 ≥22.22.2）。
+# 走 **令牌流**：仓库 secret `NPM_TOKEN`（与 nx-sk 共用同一个 npm 账号 flowot 的令牌）。
+# 想换成零令牌的 Trusted Publishing（OIDC）时，删掉下面的 NODE_AUTH_TOKEN 注入、
+# 去掉 setup-node 的 registry-url、加 OIDC 预检步骤，并在 npm 侧配一次 trust 关系即可。
 on:
   push:
     branches: [main]
 
 permissions:
   contents: write   # 打 tag 需要
-  id-token: write   # Trusted Publishing / provenance 签名需要（OIDC）
+  id-token: write   # --provenance 签名需要（OIDC）
 
 jobs:
   publish:
@@ -31,9 +28,9 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
           cache: 'pnpm'
-          # 不要写 registry-url：它生成的 .npmrc 可能干扰 OIDC 通道
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build
@@ -48,7 +45,13 @@ jobs:
 
       - name: 已存在则跳过（幂等）
         id: check
+        # if: 表达式里**不能用 secrets 上下文**（解析期直接报
+        # "Unrecognized named-value: 'secrets'"，整个 run 0 秒失败）——
+        # 判定 token 在不在必须经 env 间接传进 run 块
+        env:
+          HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
         run: |
+          echo "hasToken=$HAS_TOKEN" >> $GITHUB_OUTPUT
           if git rev-parse "${{ steps.pkg.outputs.tag }}" >/dev/null 2>&1; then
             echo "tag_exists=true" >> $GITHUB_OUTPUT
           else
@@ -60,6 +63,12 @@ jobs:
             echo "published=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: 缺 NPM_TOKEN 时明确提示（而不是静默失败）
+        if: steps.check.outputs.published == 'false' && steps.check.outputs.hasToken == 'false'
+        run: |
+          echo "::warning::仓库缺少 NPM_TOKEN，已跳过发布。"
+          echo "补上：gh secret set NPM_TOKEN --body <Automation Token> --repo On-DevPlan/nx-ditto"
+
       - name: 打 tag
         if: steps.check.outputs.tag_exists == 'false'
         run: |
@@ -68,20 +77,8 @@ jobs:
           git tag -a "${{ steps.pkg.outputs.tag }}" -m "Release ${{ steps.pkg.outputs.tag }}"
           git push origin "${{ steps.pkg.outputs.tag }}"
 
-      - name: 升级 npm（Trusted Publishing 需 npm ≥ 11.5.1）
-        run: npm install -g npm@latest
-
-      - name: OIDC 预检（发布失败时先看这里）
-        run: |
-          echo "npm 版本: $(npm --version)"
-          if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
-            echo "::error::OIDC 环境缺失（检查 permissions: id-token: write）"
-          else
-            echo "OIDC 环境: 已注入"
-            LEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" | wc -c)
-            if [ "$LEN" -gt 50 ]; then echo "ID token 获取: 成功"; else echo "::error::ID token 获取失败"; fi
-          fi
-
-      - name: 发布（OIDC，零 token）
-        if: steps.check.outputs.published == 'false'
+      - name: 发布
+        if: steps.check.outputs.published == 'false' && steps.check.outputs.hasToken == 'true'
         run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
