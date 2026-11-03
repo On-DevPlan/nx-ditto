@@ -1,0 +1,67 @@
+{
+  "name": "nx-ditto",
+  "version": "0.1.0",
+  "description": "Ditto 剪贴板历史工具：只读 Ditto SQLite 库，CLI 与 Web 面板同源",
+  "type": "module",
+  "bin": {
+    "nx-ditto": "bin/ditto.mjs"
+  },
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "assets",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "vite build && node scripts/link-local.mjs --auto",
+    "dev": "node scripts/dev.mjs",
+    "dev:vite": "vite --host 127.0.0.1",
+    "dev:serve": "node bin/ditto.mjs serve --no-open",
+    "start": "pnpm run build && node bin/ditto.mjs serve",
+    "link:local": "node scripts/link-local.mjs",
+    "unlink:local": "node scripts/link-local.mjs --unlink",
+    "lint": "eslint .",
+    "test": "pnpm run lint && pnpm run build && pnpm run test:smoke && pnpm run test:unit",
+    "test:smoke": "node tests/smoke.mjs",
+    "test:unit": "node --test tests/unit/*.test.mjs",
+    "logo": "node tools/logo-gen/cli.mjs"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "allowedVersions": {
+        "eslint-plugin-react>eslint": "^10"
+      }
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/On-DevPlan/nx-ditto.git"
+  },
+  "homepage": "https://github.com/On-DevPlan/nx-ditto#readme",
+  "bugs": {
+    "url": "https://github.com/On-DevPlan/nx-ditto/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^10.0.0",
+    "eslint-plugin-react": "^7.37.5",
+    "vite": "^6.0.7"
+  }
+}

@@ -1,0 +1,87 @@
+name: Publish to npm
+
+# push 到 main 即发布。改 package.json 的 version 就等于「准备发版」。
+#
+# 走 **Trusted Publishing（OIDC 零令牌）**：CI 用 GitHub OIDC 换发布权，
+# 仓库里不放任何长期 npm 令牌。信任关系在 npm 侧配一次：
+#   npx npm@latest trust github nx-ditto --file npm-publish.yml \
+#     --repo On-DevPlan/nx-ditto --allow-publish -y
+# 三个「不要」见 A06：发布步骤不注入 NODE_AUTH_TOKEN、setup-node 不带
+# registry-url、Node 锁 24（npm@latest 要求 ≥22.22.2）。
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write   # 打 tag 需要
+  id-token: write   # Trusted Publishing / provenance 签名需要（OIDC）
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 必须 0：浅克隆下 git rev-parse <tag> 查不到历史 tag，会重复打 tag
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 不另外指定 version —— pnpm/action-setup 会读 package.json 的 packageManager，
+      # 两边都写反而容易不一致
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+          # 不要写 registry-url：它生成的 .npmrc 可能干扰 OIDC 通道
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm test
+
+      - name: 读版本号
+        id: pkg
+        run: |
+          echo "name=$(node -p "require('./package.json').name")" >> $GITHUB_OUTPUT
+          echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+          echo "tag=v$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: 已存在则跳过（幂等）
+        id: check
+        run: |
+          if git rev-parse "${{ steps.pkg.outputs.tag }}" >/dev/null 2>&1; then
+            echo "tag_exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "tag_exists=false" >> $GITHUB_OUTPUT
+          fi
+          if npm view ${{ steps.pkg.outputs.name }}@${{ steps.pkg.outputs.version }} version >/dev/null 2>&1; then
+            echo "published=true" >> $GITHUB_OUTPUT
+          else
+            echo "published=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 打 tag
+        if: steps.check.outputs.tag_exists == 'false'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.pkg.outputs.tag }}" -m "Release ${{ steps.pkg.outputs.tag }}"
+          git push origin "${{ steps.pkg.outputs.tag }}"
+
+      - name: 升级 npm（Trusted Publishing 需 npm ≥ 11.5.1）
+        run: npm install -g npm@latest
+
+      - name: OIDC 预检（发布失败时先看这里）
+        run: |
+          echo "npm 版本: $(npm --version)"
+          if [ -z "$ACTIONS_ID_TOKEN_REQUEST_URL" ]; then
+            echo "::error::OIDC 环境缺失（检查 permissions: id-token: write）"
+          else
+            echo "OIDC 环境: 已注入"
+            LEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" | wc -c)
+            if [ "$LEN" -gt 50 ]; then echo "ID token 获取: 成功"; else echo "::error::ID token 获取失败"; fi
+          fi
+
+      - name: 发布（OIDC，零 token）
+        if: steps.check.outputs.published == 'false'
+        run: npm publish --provenance --access public
